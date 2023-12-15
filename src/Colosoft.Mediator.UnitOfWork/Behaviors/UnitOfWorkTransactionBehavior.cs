@@ -9,15 +9,25 @@ namespace Colosoft.Mediator.Behaviors
     public class UnitOfWorkTransactionBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
         where TRequest : IRequest<TResponse>
     {
-        private readonly IUnitOfWorkProvider unitOfWorkProvider;
+        protected IUnitOfWorkProvider UnitOfWorkProvider { get; }
         private readonly ILogger<UnitOfWorkTransactionBehavior<TRequest, TResponse>> logger;
 
         public UnitOfWorkTransactionBehavior(
             IUnitOfWorkProvider unitOfWorkProvider,
             ILogger<UnitOfWorkTransactionBehavior<TRequest, TResponse>> logger)
         {
-            this.unitOfWorkProvider = unitOfWorkProvider ?? throw new ArgumentNullException(nameof(unitOfWorkProvider));
+            this.UnitOfWorkProvider = unitOfWorkProvider ?? throw new ArgumentNullException(nameof(unitOfWorkProvider));
             this.logger = logger ?? throw new ArgumentException(nameof(ILogger));
+        }
+
+        protected virtual Task PublishEventsThroughEventBusAsync(Guid transactionId, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        protected virtual IUnitOfWork CreateUnitOfWork()
+        {
+            return this.UnitOfWorkProvider.Create();
         }
 
         public async virtual Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
@@ -27,14 +37,14 @@ namespace Colosoft.Mediator.Behaviors
 
             try
             {
-                if (this.unitOfWorkProvider.GetCurrent() != null)
+                if (this.UnitOfWorkProvider.GetCurrent() != null)
                 {
                     return await next();
                 }
 
-                using (var unitOfWork = this.unitOfWorkProvider.Create())
+                using (var unitOfWork = this.CreateUnitOfWork())
                 {
-                    var transactionId = Guid.NewGuid().ToString();
+                    var transactionId = unitOfWork.Id;
 
                     try
                     {
@@ -54,6 +64,8 @@ namespace Colosoft.Mediator.Behaviors
                         await unitOfWork.RollbackAsync(cancellationToken);
                         throw;
                     }
+
+                    await this.PublishEventsThroughEventBusAsync(transactionId, cancellationToken);
                 }
 
                 return response;
